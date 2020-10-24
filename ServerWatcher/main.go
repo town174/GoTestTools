@@ -9,18 +9,23 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
+	"os/exec"
 	"time"
 )
 
+//todo
+//1 只要服务处于停止状态，守护进程就会反复重启
+//2 如何让守护进程被安装时，读到当前位置, 当前只能用绝对路径
+
 var logger service.Logger
+
 type program struct{}
 
-
 var cfg *Config
-func main(){
+
+func main() {
 	cfg = GetConfig()
-	CheckWebApiWorking(cfg.URL)
-	return
 
 	svcConfig := &service.Config{
 		Name:        "Go ServiceWatcher",
@@ -65,13 +70,13 @@ func (p *program) Stop(s service.Service) error {
 func NewTicker(interval time.Duration) {
 	ticker := time.NewTicker(time.Second * interval)
 
-	i:=0
+	i := 0
 	go func() {
 		for {
-			<- ticker.C
+			<-ticker.C
 			i++
 			t := time.Now().Format("2006-01-02 15:04:05")
-			fmt.Println("i = ", i, "time = ",t)
+			fmt.Println("i = ", i, "time = ", t)
 			//服务名大小写敏感
 			as := []string{
 				cfg.ServerName,
@@ -83,31 +88,28 @@ func NewTicker(interval time.Duration) {
 			}
 			rt := CheckServiceWorking(as)
 			StartServer(rt)
-			//if i == 2 {
-				//ticker.Stop()
-			//}
 		}
 	}()
 	return
 }
 
-func CheckServiceWorking(checks []string) (map[string]int){
+func CheckServiceWorking(checks []string) map[string]bool {
 	m, _ := mgr.Connect()
 	s, _ := m.ListServices()
 	defer m.Disconnect()
-	rt := map[string]int{}
-	for _,v := range checks {
-		rt[v] = -1
+	rt := map[string]bool{}
+	for _, v := range checks {
+		rt[v] = false
 	}
 
-	for _,v := range s{
-		for _,c:= range checks{
+	for _, v := range s {
+		for _, c := range checks {
 			if c == v {
 				srv, _ := m.OpenService(c)
 				defer srv.Close()
 				srvStatus, _ := srv.Query()
-				if srvStatus.State == windows.SERVICE_RUNNING  {
-					rt[v] = 0
+				if srvStatus.State == windows.SERVICE_RUNNING && CheckWebApiWorking(cfg.URL) {
+					rt[v] = true
 					continue
 				}
 			}
@@ -117,24 +119,36 @@ func CheckServiceWorking(checks []string) (map[string]int){
 	return rt
 }
 
-func StartServer(servers map[string]int) (){
-	for k,v := range servers{
+func StartServer(servers map[string]bool) {
+	for k, v := range servers {
 		fmt.Println("service ", k, " status is ", v)
-		if v == -1 {
+		if v == false {
 			fmt.Println("restart service ", k)
-			m, _ := mgr.Connect()
-			defer m.Disconnect()
-			srv, _ := m.OpenService(k)
-			defer srv.Close()
-			srv.Start()
+			cmd1 := exec.Command("net", "stop", k)
+			fmt.Println(cmd1)
+			if out1, err := cmd1.CombinedOutput(); err != nil {
+				fmt.Println(string(out1), err)
+			}
+			time.Sleep(time.Second * 2)
+			cmd2 := exec.Command("net", "start", k)
+			fmt.Println(cmd2)
+			if out2, err := cmd2.CombinedOutput(); err != nil {
+				fmt.Println(string(out2), err)
+			}
+			//m, _ := mgr.Connect()
+			//defer m.Disconnect()
+			//srv, _ := m.OpenService(k)
+			//defer srv.Close()
+			//srv.Close()
+			//srv.Start()
 		}
 	}
 }
 
 type Config struct {
-	ServerName string `json:"serverName"`
-	Interval   time.Duration    `json:"interval"`
-	URL        string `json:"url"`
+	ServerName string        `json:"serverName"`
+	Interval   time.Duration `json:"interval"`
+	URL        string        `json:"url"`
 }
 
 // 创建一个错误处理函数，避免过多的 if err != nil{} 出现
@@ -145,11 +159,16 @@ func dropErr(e error) {
 	}
 }
 
-const CONFIG_PATH  = "config.json"
-func GetConfig() (cfg *Config){
+const CONFIG_PATH = "config.json"
 
-    //ioutil读取整个文件
-	fileData,err:=ioutil.ReadFile(CONFIG_PATH)
+//const CONFIG_PATH  = "D:\\GoPath\\src\\town\\TestTools\\ServerWatcher\\config.json"
+func GetConfig() (cfg *Config) {
+
+	fpt, err := os.Getwd()
+	//fpt,err := filepath.Abs(filepath.Dir(CONFIG_PATH))
+	dropErr(err)
+	//ioutil读取整个文件
+	fileData, err := ioutil.ReadFile(fpt + "\\" + CONFIG_PATH)
 	dropErr(err)
 	cfgStr := string(fileData)
 	//fmt.Println(cfgStr)
@@ -166,14 +185,14 @@ func GetConfig() (cfg *Config){
 	//		{"ServerName":"Beijing_VPN","ServerIp":"127.0.0.2"}]}`
 
 	//var c Config
-	c:=&Config{}
-	json.Unmarshal([]byte(cfgStr),&c)
-	fmt.Println(c.ServerName,c.Interval,c.URL)
-	return  c
+	c := &Config{}
+	json.Unmarshal([]byte(cfgStr), &c)
+	fmt.Println(c.ServerName, c.Interval, c.URL)
+	return c
 }
 
-func CheckWebApiWorking(url string)(rt bool){
-	rsp,err:= http.Get(url)
+func CheckWebApiWorking(url string) (rt bool) {
+	rsp, err := http.Get(url)
 	if err != nil {
 		return false
 	}

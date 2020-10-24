@@ -1,5 +1,5 @@
 {
   "serverName": "Ssit.SmartBookShelf",
-  "interval": 10,
+  "interval": 20,
   "url":"http://localhost:9001/api/services/openapi/workingTeam/GetAllWorkingTeam"
 }
