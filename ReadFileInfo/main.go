@@ -6,8 +6,6 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"sync"
-	"time"
 )
 
 var verbose = flag.Bool("v", false, "show verbose progress messages")
@@ -16,13 +14,6 @@ var done = make(chan struct{})
 
 //获取目录下文件信息
 func dirents(dir string) []os.FileInfo {
-	select {
-	case sendMsg <- struct{}{}:
-	case <-done:
-		return nil
-	}
-	//why
-	defer func() { <-sendMsg }()
 	entries, err := ioutil.ReadDir(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dul:%v\n", err)
@@ -32,16 +23,11 @@ func dirents(dir string) []os.FileInfo {
 }
 
 //递归调用dirents函数
-func walkDir(dir string, n *sync.WaitGroup, fileSizes chan<- int64) {
-	defer n.Done()
-	if cancelled() {
-		return
-	}
+func walkDir(dir string, fileSizes chan<- int64) {
 	for _, entry := range dirents(dir) {
 		if entry.IsDir() {
-			n.Add(1)
 			subdir := filepath.Join(dir, entry.Name())
-			go walkDir(subdir, n, fileSizes)
+			walkDir(subdir, fileSizes)
 		} else {
 			fileSizes <- entry.Size()
 		}
@@ -65,30 +51,22 @@ func cancelled() bool {
 func main() {
 	flag.Parse()
 	roots := flag.Args()
-	var tick <-chan time.Time
-
-	if *verbose {
-		tick = time.Tick(time.Microsecond * 500)
-	}
 	if len(roots) == 0 {
 		roots = []string{"."}
 	}
 
 	fileSizes := make(chan int64)
-	var nfiles, nbytes int64
-	//why
-	var n sync.WaitGroup
-
-	for _, root := range roots {
-		n.Add(1)
-		go walkDir(root, &n, fileSizes)
-	}
 	go func() {
-		n.Wait()
+		for _, root := range roots {
+			walkDir(root, fileSizes)
+		}
 		close(fileSizes)
 	}()
-	go func() {
-		os.Stdin.Read(make([]byte, 1))
-		close(done)
-	}()
+
+	var nfiles, nbytes int64
+	for size := range fileSizes {
+		nfiles++
+		nbytes += size
+	}
+	printDiskUsage(nfiles, nbytes)
 }
